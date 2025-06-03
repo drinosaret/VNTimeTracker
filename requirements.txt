@@ -1,0 +1,5 @@
+ttkthemes
+psutil
+pywin32
+requests
+Pillow

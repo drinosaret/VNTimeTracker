@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+image_cache/
+timelog.json
+config.json
+*.csv
+vn_tracker.bat
