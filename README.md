@@ -41,5 +41,4 @@ A simple Python app to track time spent playing visual novels on Windows. It inc
    - Click "今日のリセット" to clear today’s time.
 
 ## Notes
-- **Data Files**: `config.json` (settings), `timelog.json` (time logs), and `image_cache/` (cover images) are created locally and not uploaded to GitHub.
 - **Windows Only**: This app uses `pywin32`, so it won’t work on Mac or Linux.
