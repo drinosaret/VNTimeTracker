@@ -1,6 +1,6 @@
 # Visual Novel Time Tracker
 
-A simple Python app to track time spent playing visual novels on Windows. It includes AFK detection, VNDB cover images, and daily reading goals.
+A simple Python app to track time spent playing visual novels on Windows. It includes AFK detection, VNDB cover images, and daily reading goals. Aimed at Japanese learners who wish to maximize their time spent on immersion.
 
 ## Installation
 1. **Clone the Repository**:
