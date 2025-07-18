@@ -1,44 +1,48 @@
 # Visual Novel Time Tracker
 
-A simple Python app to track time spent playing visual novels on Windows. It includes AFK detection, VNDB cover images, and daily reading goals.
+A PyQt5 application for tracking time spent playing visual novels with VNDB integration and AFK detection.
 
-## Installation
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/drinosaret/VNTimeTtracker.git
-   cd VNTimeTtracker
-   ```
+## Quick Start
 
-2. **Install Dependencies**:
-   Make sure you have Python 3.8 or higher. Then run:
+1. **Clone and setup**:
+
    ```bash
+   git clone https://github.com/drinosaret/VNTimeTracker.git
+   cd VNTimeTracker
    pip install -r requirements.txt
    ```
-   This installs `ttkthemes`, `psutil`, `pywin32`, `requests`, and `Pillow`.
 
-3. **Run the App**:
+2. **Run the application**:
+
    ```bash
-   python vn_tracker.py
+   python run.py
    ```
 
-**Note**: Works only on Windows because of `pywin32`.
+## Requirements
 
-## Usage
-1. **Select a Visual Novel**:
-   - Search for a visual novel using the search bar.
-   - Pick one from the dropdown.
-2. **Choose a Process**:
-   - Select the game's executable from the process list.
-   - Click "ゲームとプロセスを選択" to start tracking.
-3. **Set Goals**:
-   - Enter a daily reading goal (e.g., 90 minutes).
-   - Set an AFK timeout (e.g., 60 seconds).
-4. **Track Time**:
-   - The overlay shows your reading time (Green: active, Yellow: AFK, Red: inactive).
-   - See today’s time, weekly/monthly stats, and progress in the main window.
-5. **Export or Reset**:
-   - Click "データエクスポート" to save time logs as a CSV.
-   - Click "今日のリセット" to clear today’s time.
+- Python 3.8+
+- Windows OS
+- Dependencies listed in `requirements.txt`
 
-## Notes
-- **Windows Only**: This app uses `pywin32`, so it won’t work on Mac or Linux.
+## Features
+
+- Process monitoring and time tracking
+- VNDB integration for cover images
+- Floating overlay with real-time status
+- AFK detection and goal setting
+- Data export and statistics
+
+## Building Executable
+
+To create a standalone executable:
+
+```bash
+pip install pyinstaller
+pyinstaller VN-Tracker.spec
+```
+
+Or use the provided batch file on Windows:
+
+```bash
+build.bat
+```

@@ -1,5 +1,6 @@
-ttkthemes
+PyQt5
 psutil
 pywin32
 requests
 Pillow
+pystray

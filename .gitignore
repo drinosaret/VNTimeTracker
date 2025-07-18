@@ -1,7 +1,35 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+
+# Application data
 image_cache/
 timelog.json
 config.json
 *.csv
+
+# Virtual environment
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+VN-Tracker-Portable/
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old files
 vn_tracker.bat

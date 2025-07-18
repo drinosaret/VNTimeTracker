@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+    
+    - name: Build executable with spec file
+      run: |
+        pyinstaller vn_tracker.spec
+    
+    - name: Get version info
+      id: version
+      shell: pwsh
+      run: |
+        if ($env:GITHUB_REF -match "refs/tags/(.*)") {
+          $version = $matches[1]
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "IS_RELEASE=true" >> $env:GITHUB_OUTPUT
+        } else {
+          $short_sha = git rev-parse --short HEAD
+          $version = "dev-$short_sha"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "IS_RELEASE=false" >> $env:GITHUB_OUTPUT
+        }
+        echo "Building version: $version"
+    
+    - name: Rename executable
+      run: |
+        if (Test-Path "dist\vn_tracker.exe") {
+          Move-Item "dist\vn_tracker.exe" "dist\VN-Tracker-${{ steps.version.outputs.VERSION }}.exe"
+        } else {
+          Write-Error "vn_tracker.exe not found in dist folder"
+          exit 1
+        }
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: VN-Tracker-${{ steps.version.outputs.VERSION }}
+        path: dist/VN-Tracker-${{ steps.version.outputs.VERSION }}.exe
+    
+    - name: Create Release
+      if: steps.version.outputs.IS_RELEASE == 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: VN Tracker ${{ steps.version.outputs.VERSION }}
+        files: dist/VN-Tracker-${{ steps.version.outputs.VERSION }}.exe
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Create Development Release
+      if: steps.version.outputs.IS_RELEASE == 'false' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: VN Tracker Development Build ${{ steps.version.outputs.VERSION }}
+        files: dist/VN-Tracker-${{ steps.version.outputs.VERSION }}.exe
+        generate_release_notes: true
+        draft: false
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
