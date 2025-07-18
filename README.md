@@ -41,7 +41,7 @@ pip install pyinstaller
 pyinstaller VN-Tracker.spec
 ```
 
-Or use the provided batch file on Windows:
+Or use this batch file on Windows:
 
 ```bash
 build.bat
