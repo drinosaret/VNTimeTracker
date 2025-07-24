@@ -35,6 +35,7 @@ class I18nManager:
                 "statistics": "統計",
                 "weekly": "週間",
                 "monthly": "月間",
+                "total": "合計",
                 "minutes": "分",
                 
                 # Settings
@@ -49,6 +50,7 @@ class I18nManager:
                 "overlay_settings": "オーバーレイ設定",
                 "overlay_transparency": "オーバーレイ透明度",
                 "show_overlay": "オーバーレイを表示",
+                "show_overlay_percentage": "目標達成率を表示",
                 
                 # Language settings
                 "language_settings": "言語設定",
@@ -100,6 +102,7 @@ class I18nManager:
                 "statistics": "Statistics",
                 "weekly": "Weekly",
                 "monthly": "Monthly",
+                "total": "Total",
                 "minutes": "min",
                 
                 # Settings
@@ -114,6 +117,7 @@ class I18nManager:
                 "overlay_settings": "Overlay Settings",
                 "overlay_transparency": "Overlay Transparency",
                 "show_overlay": "Show Overlay",
+                "show_overlay_percentage": "Show Goal Percentage",
                 
                 # Language settings
                 "language_settings": "Language Settings",

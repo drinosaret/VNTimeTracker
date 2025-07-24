@@ -5,32 +5,35 @@ import threading
 import time
 from typing import List, Callable, Optional
 from ..utils.system_utils import get_active_process_name, get_running_processes
+from ..utils.safe_threading import SafeEvent, safe_join_thread
 
 
 class ProcessMonitor:
-    """Monitors system processes and active application."""
+    """System process and active application monitor."""
     
     def __init__(self):
         self.running = True
         self.process_list: List[str] = []
         self.process_list_callbacks: List[Callable[[List[str]], None]] = []
         self.refresh_thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._shutdown_event = SafeEvent()
     
     def start(self) -> None:
-        """Start the process monitoring."""
+        """Start process monitoring."""
         if self.refresh_thread is None or not self.refresh_thread.is_alive():
             self.running = True
             self.refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
             self.refresh_thread.start()
-            # Initial load
+            # Initial process list load
             self._update_process_list()
     
     def stop(self) -> None:
-        """Stop the process monitoring."""
+        """Stop process monitoring."""
         self.running = False
+        self._shutdown_event.set()
         if self.refresh_thread and self.refresh_thread.is_alive():
-            self.refresh_thread.join(timeout=1.0)
+            safe_join_thread(self.refresh_thread, timeout=3.0)
     
     def get_active_process(self) -> Optional[str]:
         """Get the currently active process name."""
@@ -71,14 +74,19 @@ class ProcessMonitor:
     def _refresh_loop(self) -> None:
         """Background loop to refresh process list."""
         refresh_interval = 120  # Increase to 2 minutes to reduce CPU usage
-        while self.running:
+        while self.running and not self._shutdown_event.is_set():
             try:
                 self._update_process_list()
-                time.sleep(refresh_interval)
+                # Use safe polling instead of threading.Event.wait()
+                start_wait = time.time()
+                while time.time() - start_wait < refresh_interval:
+                    if self._shutdown_event.is_set():
+                        return
+                    time.sleep(5.0)  # Poll every 5 seconds
             except Exception as e:
                 print(f"Process monitoring error: {e}")
-                if self.running:
-                    time.sleep(10)  # Wait before retrying
+                if self.running and not self._shutdown_event.is_set():
+                    time.sleep(10.0)  # Simple sleep
     
     def refresh_process_list(self) -> None:
         """Force an immediate refresh of the process list."""

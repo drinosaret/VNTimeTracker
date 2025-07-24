@@ -7,8 +7,11 @@ __pycache__/
 # Application data
 image_cache/
 timelog.json
+timelog.json.backup
 config.json
 *.csv
+logs/
+
 
 # Virtual environment
 .venv/

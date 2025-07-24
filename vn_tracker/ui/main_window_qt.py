@@ -1,4 +1,4 @@
-"""PyQt5-based main application window for superior performance."""
+"""Main application window."""
 
 import os
 import sys
@@ -17,19 +17,19 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QPixmap, QIcon, QFont, QPalette
 
 from ..core.tracker import TimeTracker, TrackingState
+from ..core.process_monitor import ProcessMonitor
 from ..utils.config import ConfigManager
 from ..utils.system_utils import format_time
 from ..utils.i18n import I18nManager
 
 # Suppress Qt threading warnings by redirecting Qt messages
 def qt_message_handler(mode, context, message):
-    """Custom Qt message handler to suppress harmless threading warnings."""
-    # Suppress these specific warnings that are not harmful but noisy
+    """Filter Qt threading warnings."""
+    # Suppress specific harmless warnings
     if "QBasicTimer::start: QBasicTimer can only be used with threads started with QThread" in message:
         return
     if "Cannot queue arguments of type 'QItemSelection'" in message:
         return
-    # Print other Qt messages normally
     print(f"Qt: {message}")
 
 # Install the custom message handler
@@ -42,7 +42,7 @@ except ImportError:
 
 
 class VNSearchWorker(QThread):
-    """Background thread for VN searches to keep UI responsive."""
+    """Background VN search worker thread."""
     
     search_completed = pyqtSignal(list)
     
@@ -84,7 +84,7 @@ class ImageLoadWorker(QThread):
 class VNTrackerMainWindow(QMainWindow):
     """PyQt5 main window for VN Tracker."""
     
-    def __init__(self, config_file: str, log_file: str, image_cache_dir: str):
+    def __init__(self, config_file: str, log_file: str, image_cache_dir: str, crash_logger=None):
         super().__init__()
         
         # Register Qt meta types to fix threading warnings (if available)
@@ -118,6 +118,7 @@ class VNTrackerMainWindow(QMainWindow):
         # Store initialization parameters
         self.log_file = log_file
         self.image_cache_dir = image_cache_dir
+        self.crash_logger = crash_logger
         
         # Initialize lightweight managers first
         self.config_manager = ConfigManager(config_file)
@@ -305,6 +306,7 @@ class VNTrackerMainWindow(QMainWindow):
         time_layout.setContentsMargins(12, 8, 12, 8)  # Reasonable margins
         
         self.time_label = QLabel(f"{self.i18n.t('today_reading_time')}: 00:00:00")
+        self.time_label.setObjectName("time_label")  # Add object name for specific styling
         font = QFont()
         font.setPointSize(14)
         font.setBold(True)
@@ -330,9 +332,11 @@ class VNTrackerMainWindow(QMainWindow):
         
         self.week_label = QLabel(f"{self.i18n.t('weekly')}: 0 {self.i18n.t('minutes')}")
         self.month_label = QLabel(f"{self.i18n.t('monthly')}: 0 {self.i18n.t('minutes')}")
+        self.total_label = QLabel(f"{self.i18n.t('total')}: 0 {self.i18n.t('minutes')}")
         
         stats_layout.addWidget(self.week_label)
         stats_layout.addWidget(self.month_label)
+        stats_layout.addWidget(self.total_label)
         
         layout.addWidget(stats_group)
         
@@ -400,6 +404,11 @@ class VNTrackerMainWindow(QMainWindow):
         self.overlay_checkbox = QCheckBox(self.i18n.t("show_overlay"))
         self.overlay_checkbox.setChecked(self.config_manager.show_overlay)
         overlay_layout.addWidget(self.overlay_checkbox)
+        
+        # Overlay percentage checkbox
+        self.overlay_percentage_checkbox = QCheckBox(self.i18n.t("show_overlay_percentage"))
+        self.overlay_percentage_checkbox.setChecked(self.config_manager.show_overlay_percentage)
+        overlay_layout.addWidget(self.overlay_percentage_checkbox)
         
         # Overlay transparency
         transparency_group = QGroupBox(self.i18n.t("overlay_transparency"))
@@ -604,6 +613,33 @@ class VNTrackerMainWindow(QMainWindow):
             QLabel {
                 color: #333333;
             }
+            /* Time label state styling */
+            QLabel[objectName="time_label"] {
+                color: #333333;
+                background-color: transparent;
+                border: 2px solid transparent;
+                border-radius: 5px;
+                padding: 5px;
+                font-weight: bold;
+            }
+            QLabel[objectName="time_label"][state="active"] {
+                color: #2d5f2d !important;
+                background-color: rgba(144, 238, 144, 0.3) !important;
+                border: 2px solid #90EE90 !important;
+            }
+            QLabel[objectName="time_label"][state="afk"] {
+                color: #b8860b !important;
+                background-color: rgba(255, 255, 0, 0.2) !important;
+                border: 2px solid #FFD700 !important;
+            }
+            QLabel[objectName="time_label"][state="inactive"] {
+                color: #8b0000 !important;
+                background-color: #ffb6c1 !important;
+                border: 2px solid #ff6b6b !important;
+                border-radius: 5px !important;
+                padding: 5px !important;
+                font-weight: bold !important;
+            }
         """)
     
     def setup_connections(self):
@@ -628,6 +664,7 @@ class VNTrackerMainWindow(QMainWindow):
         
         # Settings
         self.overlay_checkbox.toggled.connect(self.toggle_overlay)
+        self.overlay_percentage_checkbox.toggled.connect(self.toggle_overlay_percentage)
         self.transparency_slider.valueChanged.connect(self.update_transparency)
     
     def setup_system_tray(self):
@@ -855,13 +892,21 @@ class VNTrackerMainWindow(QMainWindow):
             # Update statistics
             week_minutes = self.tracker.get_weekly_seconds() // 60
             month_minutes = self.tracker.get_monthly_seconds() // 60
+            total_minutes = self.tracker.get_total_seconds() // 60
 
             self.week_label.setText(f"{self.i18n.t('weekly')}: {week_minutes} {self.i18n.t('minutes')}")
             self.month_label.setText(f"{self.i18n.t('monthly')}: {month_minutes} {self.i18n.t('minutes')}")
+            self.total_label.setText(f"{self.i18n.t('total')}: {total_minutes} {self.i18n.t('minutes')}")
 
             # Update overlay time only (color is handled by state change callback)
             if self.overlay and self.config_manager.show_overlay:
                 self.overlay.update_time(time_str)
+                
+                # Update goal percentage if enabled
+                if self.config_manager.show_overlay_percentage:
+                    goal_seconds = self.config_manager.goal_minutes * 60
+                    percentage = min((today_seconds / goal_seconds) * 100, 100.0) if goal_seconds > 0 else 0.0
+                    self.overlay.update_percentage(percentage)
         except Exception as e:
             print(f"Display update error: {e}")
     
@@ -871,49 +916,43 @@ class VNTrackerMainWindow(QMainWindow):
         time_str = format_time(current_seconds)
         self.time_label.setText(f"{self.i18n.t('today_reading_time')}: {time_str}")
         
+        # Update progress bar immediately to stay in sync with overlay
+        self.progress_bar.setValue(min(current_seconds, self.progress_bar.maximum()))
+        
         # Update time label color based on tracking state
-        if state == TrackingState.ACTIVE:
-            # Green for active tracking
-            self.time_label.setStyleSheet("""
-                QLabel {
-                    color: #2d5f2d;
-                    background-color: rgba(144, 238, 144, 0.3);
-                    border: 2px solid #90EE90;
-                    border-radius: 5px;
-                    padding: 5px;
-                    font-weight: bold;
-                }
-            """)
-        elif state == TrackingState.AFK:
-            # Yellow for AFK
-            self.time_label.setStyleSheet("""
-                QLabel {
-                    color: #b8860b;
-                    background-color: rgba(255, 255, 0, 0.2);
-                    border: 2px solid #FFD700;
-                    border-radius: 5px;
-                    padding: 5px;
-                    font-weight: bold;
-                }
-            """)
-        else:  # INACTIVE
-            # Red for inactive
-            self.time_label.setStyleSheet("""
-                QLabel {
-                    color: #8b0000;
-                    background-color: rgba(255, 182, 193, 0.3);
-                    border: 2px solid #FF6B6B;
-                    border-radius: 5px;
-                    padding: 5px;
-                    font-weight: bold;
-                }
-            """)
+        try:
+            if state == TrackingState.ACTIVE:
+                # Green for active tracking
+                self.time_label.setProperty("state", "active")
+            elif state == TrackingState.AFK:
+                # Yellow for AFK
+                self.time_label.setProperty("state", "afk")
+            else:  # INACTIVE
+                # Red for inactive
+                self.time_label.setProperty("state", "inactive")
+            
+            # Force style refresh with error handling
+            try:
+                self.time_label.style().unpolish(self.time_label)
+                self.time_label.style().polish(self.time_label)
+                    
+            except Exception as e:
+                print(f"Style refresh error: {e}")
+                
+        except Exception as e:
+            print(f"State styling error: {e}")
         
         # Also update overlay color and time immediately when state changes
         if self.overlay and self.config_manager.show_overlay:
             # Update overlay immediately on state change for responsive feedback
             self.update_overlay_color(state)
             self.overlay.update_time(time_str)
+            
+            # Update goal percentage if enabled
+            if self.config_manager.show_overlay_percentage:
+                goal_seconds = self.config_manager.goal_minutes * 60
+                percentage = min((current_seconds / goal_seconds) * 100, 100.0) if goal_seconds > 0 else 0.0
+                self.overlay.update_percentage(percentage)
     
     def on_tracking_updated(self):
         """Handle tracking data updates."""
@@ -934,27 +973,53 @@ class VNTrackerMainWindow(QMainWindow):
     @pyqtSlot()
     def set_goal(self):
         """Set the goal time."""
-        minutes = self.goal_spinbox.value()
-        self.progress_bar.setMaximum(minutes * 60)
-        self.config_manager.set("goal_minutes", minutes)
-        self.config_manager.save()
-        
-        QMessageBox.information(self, "Success", f"Goal set to {minutes} minutes")
+        try:
+            minutes = self.goal_spinbox.value()
+            self.progress_bar.setMaximum(minutes * 60)
+            
+            # Thread-safe config update
+            self.config_manager.set("goal_minutes", minutes)
+            self.config_manager.save()
+            
+            # Update overlay percentage immediately if it's shown
+            if self.overlay and self.config_manager.show_overlay and self.config_manager.show_overlay_percentage:
+                if self.tracker:
+                    try:
+                        today_seconds = self.tracker.get_current_seconds()
+                        goal_seconds = minutes * 60
+                        percentage = min((today_seconds / goal_seconds) * 100, 100.0) if goal_seconds > 0 else 0.0
+                        self.overlay.update_percentage(percentage)
+                    except Exception as e:
+                        if self.crash_logger:
+                            self.crash_logger.log_error(f"Error updating overlay in set_goal: {e}")
+            
+            QMessageBox.information(self, "Success", f"Goal set to {minutes} minutes")
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error in set_goal: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to set goal: {e}")
     
     @pyqtSlot()
     def set_afk_threshold(self):
         """Set the AFK threshold."""
-        # Safety check - don't set threshold if tracker isn't ready
-        if not self.tracker:
-            QMessageBox.information(self, "Please Wait", "Application is still loading...")
-            return
+        try:
+            # Safety check - don't set threshold if tracker isn't ready
+            if not self.tracker:
+                QMessageBox.information(self, "Please Wait", "Application is still loading...")
+                return
+                
+            seconds = self.afk_spinbox.value()
             
-        seconds = self.afk_spinbox.value()
-        self.tracker.set_afk_threshold(seconds)
-        self.config_manager.set("afk_threshold", seconds)
-        self.config_manager.save()
-        
-        QMessageBox.information(self, "Success", f"AFK threshold set to {seconds} seconds")
+            # Thread-safe tracker update
+            self.tracker.set_afk_threshold(seconds)
+            self.config_manager.set("afk_threshold", seconds)
+            self.config_manager.save()
+            
+            QMessageBox.information(self, "Success", f"AFK threshold set to {seconds} seconds")
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error in set_afk_threshold: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to set AFK threshold: {e}")
     
     @pyqtSlot()
     def set_language(self):
@@ -967,14 +1032,31 @@ class VNTrackerMainWindow(QMainWindow):
     @pyqtSlot(bool)
     def toggle_overlay(self, show):
         """Toggle overlay visibility."""
-        self.config_manager.set("show_overlay", show)
-        self.config_manager.save()
-        
-        if self.overlay:
-            if show:
-                self.overlay.show()
-            else:
-                self.overlay.hide()
+        try:
+            self.config_manager.set("show_overlay", show)
+            self.config_manager.save()
+            
+            if self.overlay:
+                if show:
+                    self.overlay.show()
+                else:
+                    self.overlay.hide()
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error in toggle_overlay: {e}")
+    
+    @pyqtSlot(bool)
+    def toggle_overlay_percentage(self, show):
+        """Toggle overlay percentage visibility."""
+        try:
+            self.config_manager.set("show_overlay_percentage", show)
+            self.config_manager.save()
+            
+            if self.overlay:
+                self.overlay.set_show_percentage(show)
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error in toggle_overlay_percentage: {e}")
     
     @pyqtSlot(int)
     def update_transparency(self, value):
@@ -1079,6 +1161,9 @@ class VNTrackerMainWindow(QMainWindow):
             alpha = self.config_manager.overlay_alpha
             self.overlay.setWindowOpacity(alpha)
             
+            # Set percentage visibility
+            self.overlay.set_show_percentage(self.config_manager.show_overlay_percentage)
+            
             # Show overlay if enabled
             if self.config_manager.show_overlay:
                 self.overlay.show()
@@ -1088,13 +1173,16 @@ class VNTrackerMainWindow(QMainWindow):
         if not self.overlay:
             return
             
-        # Always set a color regardless of state
-        if state == TrackingState.ACTIVE:
-            self.overlay.set_color("rgba(40, 80, 40, 200)", "#ffffff")
-        elif state == TrackingState.AFK:
-            self.overlay.set_color("rgba(100, 80, 0, 200)", "#ffffff")
-        else:  # INACTIVE or None - use red for inactive
-            self.overlay.set_color("rgba(80, 40, 40, 200)", "#ffffff")
+        try:
+            # Always set a color regardless of state
+            if state == TrackingState.ACTIVE:
+                self.overlay.set_color("rgba(40, 80, 40, 200)", "#ffffff")
+            elif state == TrackingState.AFK:
+                self.overlay.set_color("rgba(100, 80, 0, 200)", "#ffffff")
+            else:  # INACTIVE or None - use red for inactive
+                self.overlay.set_color("rgba(80, 40, 40, 200)", "#ffffff")
+        except Exception as e:
+            print(f"Overlay color update error: {e}")
     
     def initialize_heavy_components(self):
         """Initialize heavy components asynchronously after UI is shown."""
@@ -1119,7 +1207,7 @@ class VNTrackerMainWindow(QMainWindow):
             
             self.loading_label.setText("🔄 Initializing tracker...")
             # Initialize tracker
-            self.tracker = TimeTracker(self.data_manager, self.process_monitor)
+            self.tracker = TimeTracker(self.data_manager, self.process_monitor, self.crash_logger)
             
             # Load AFK threshold from config
             self.tracker.set_afk_threshold(self.config_manager.afk_threshold)
