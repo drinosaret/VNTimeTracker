@@ -2,6 +2,18 @@
 echo Building VN Tracker executable...
 echo.
 
+REM Check for debug flag
+set DEBUG_MODE=0
+if "%1"=="debug" set DEBUG_MODE=1
+
+if %DEBUG_MODE%==1 (
+    echo Building in DEBUG mode...
+    set VN_TRACKER_DEBUG=1
+) else (
+    echo Building in RELEASE mode...
+    set VN_TRACKER_DEBUG=0
+)
+
 REM Check if PyInstaller is installed
 python -c "import PyInstaller" 2>nul
 if errorlevel 1 (
@@ -20,6 +32,9 @@ pyinstaller vn_tracker.spec
 if exist "dist\vn_tracker.exe" (
     echo.
     echo Build successful! Executable created at: dist\vn_tracker.exe
+    if %DEBUG_MODE%==1 (
+        echo DEBUG BUILD - Console window will be visible
+    )
     echo File size: 
     dir "dist\vn_tracker.exe" | findstr "vn_tracker.exe"
     echo.
