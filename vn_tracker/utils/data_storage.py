@@ -64,44 +64,81 @@ class TimeDataManager:
     
     def save(self, force_backup: bool = False) -> None:
         """Save time data with atomic write and backup."""
-        with self._lock:
+        # Use timeout to prevent deadlocks
+        if self._lock.acquire(timeout=10.0):
             try:
+                # Check if we have valid data to save
+                if not hasattr(self, '_data') or self._data is None:
+                    print("Warning: No data to save")
+                    return
+                
                 # Create backup if changes exist or forced
                 if self._pending_changes or force_backup:
                     self._create_backup()
                 
-                # Atomic write operation
-                with open(self.temp_file, "w", encoding="utf-8") as f:
-                    json.dump(self._data, f, indent=2, ensure_ascii=False)
+                # Ensure temp file directory exists
+                temp_dir = os.path.dirname(self.temp_file)
+                if temp_dir and not os.path.exists(temp_dir):
+                    os.makedirs(temp_dir, exist_ok=True)
                 
-                # Atomic file replacement
-                if os.path.exists(self.log_file):
-                    os.replace(self.temp_file, self.log_file)
-                else:
-                    os.rename(self.temp_file, self.log_file)
+                # Atomic write operation with error handling
+                try:
+                    with open(self.temp_file, "w", encoding="utf-8") as f:
+                        json.dump(self._data, f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    print(f"Failed to write temporary file: {e}")
+                    raise
                 
-                self._pending_changes = False
-                
-            except Exception as e:
-                print(f"Time data save error: {e}")
-                # Clean up temporary file
+                # Atomic file replacement with validation
                 if os.path.exists(self.temp_file):
+                    # Verify the temp file was written correctly
                     try:
-                        os.remove(self.temp_file)
-                    except:
-                        pass
+                        with open(self.temp_file, "r", encoding="utf-8") as f:
+                            test_data = json.load(f)
+                        
+                        # Replace the main file
+                        if os.path.exists(self.log_file):
+                            os.replace(self.temp_file, self.log_file)
+                        else:
+                            os.rename(self.temp_file, self.log_file)
+                        
+                        self._pending_changes = False
+                        
+                    except Exception as e:
+                        print(f"Failed to validate or replace file: {e}")
+                        # Clean up temp file if replacement failed
+                        try:
+                            if os.path.exists(self.temp_file):
+                                os.remove(self.temp_file)
+                        except:
+                            pass
+                        raise
+                else:
+                    raise Exception("Temporary file was not created")
+                    
+            except Exception as e:
+                print(f"Data save error: {e}")
                 raise
+            finally:
+                self._lock.release()
+        else:
+            raise Exception("Failed to acquire data lock for save operation within timeout")
     
     def add_time(self, vn_title: str, seconds: int, date: Optional[str] = None) -> None:
-        """Add time seconds to VN tracking data."""
-        if not vn_title:
+        """Add time for a VN with improved thread safety."""
+        if not vn_title or seconds <= 0:
             return
         
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
         
-        with self._lock:
+        # Use timeout to prevent deadlocks
+        if self._lock.acquire(timeout=5.0):
             try:
+                # Check if we have valid data structure
+                if not hasattr(self, '_data') or self._data is None:
+                    self._data = {}
+                
                 self._data.setdefault(vn_title, {})
                 current_time = self._data[vn_title].get(date, 0)
                 self._data[vn_title][date] = current_time + seconds
@@ -109,6 +146,10 @@ class TimeDataManager:
             except Exception as e:
                 print(f"Time addition error: {e}")
                 raise  # Re-raise to allow caller to handle
+            finally:
+                self._lock.release()
+        else:
+            raise Exception("Failed to acquire data lock for add_time operation within timeout")
     
     def get_today_seconds(self, vn_title: str) -> int:
         """Get today's seconds for a VN."""

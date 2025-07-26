@@ -84,6 +84,11 @@ class ImageLoadWorker(QThread):
 class VNTrackerMainWindow(QMainWindow):
     """PyQt5 main window for VN Tracker."""
     
+    # Add signals for thread-safe updates
+    process_list_updated_signal = pyqtSignal(list)
+    tracking_state_changed_signal = pyqtSignal(object, int)  # TrackingState, seconds
+    tracking_updated_signal = pyqtSignal()
+    
     def __init__(self, config_file: str, log_file: str, image_cache_dir: str, crash_logger=None):
         super().__init__()
         
@@ -960,15 +965,52 @@ class VNTrackerMainWindow(QMainWindow):
         pass
     
     def on_process_list_updated(self, processes):
-        """Handle process list updates."""
-        current_process = self.process_dropdown.currentText()
-        self.process_dropdown.clear()
-        self.process_dropdown.addItems(processes)
-        
-        # Restore selection if possible
-        index = self.process_dropdown.findText(current_process)
-        if index >= 0:
-            self.process_dropdown.setCurrentIndex(index)
+        """Handle process list updates in main thread."""
+        try:
+            current_process = self.process_dropdown.currentText()
+            self.process_dropdown.clear()
+            self.process_dropdown.addItems(processes)
+            
+            # Restore selection if possible
+            index = self.process_dropdown.findText(current_process)
+            if index >= 0:
+                self.process_dropdown.setCurrentIndex(index)
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error updating process list UI: {e}")
+            else:
+                print(f"Error updating process list UI: {e}")
+    
+    def _emit_process_list_signal(self, processes):
+        """Thread-safe signal emitter for process list updates."""
+        try:
+            # Emit signal to be handled in main thread
+            self.process_list_updated_signal.emit(processes)
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error emitting process list signal: {e}")
+            else:
+                print(f"Error emitting process list signal: {e}")
+    
+    def _emit_tracking_state_signal(self, state, current_seconds):
+        """Thread-safe signal emitter for tracking state changes."""
+        try:
+            self.tracking_state_changed_signal.emit(state, current_seconds)
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error emitting tracking state signal: {e}")
+            else:
+                print(f"Error emitting tracking state signal: {e}")
+    
+    def _emit_tracking_updated_signal(self):
+        """Thread-safe signal emitter for tracking updates."""
+        try:
+            self.tracking_updated_signal.emit()
+        except Exception as e:
+            if self.crash_logger:
+                self.crash_logger.log_error(f"Error emitting tracking updated signal: {e}")
+            else:
+                print(f"Error emitting tracking updated signal: {e}")
     
     @pyqtSlot()
     def set_goal(self):
@@ -1218,9 +1260,16 @@ class VNTrackerMainWindow(QMainWindow):
             
             self.loading_label.setText("🔄 Connecting components...")
             # Setup connections that require heavy components with proper threading
-            self.tracker.add_state_callback(self.on_tracking_state_changed)
-            self.tracker.add_update_callback(self.on_tracking_updated)
-            self.process_monitor.add_process_list_callback(self.on_process_list_updated)
+            
+            # Connect signals for thread-safe updates
+            self.tracking_state_changed_signal.connect(self.on_tracking_state_changed, Qt.QueuedConnection)
+            self.tracking_updated_signal.connect(self.on_tracking_updated, Qt.QueuedConnection)
+            self.process_list_updated_signal.connect(self.on_process_list_updated, Qt.QueuedConnection)
+            
+            # Register thread-safe signal emitters as callbacks
+            self.tracker.add_state_callback(self._emit_tracking_state_signal)
+            self.tracker.add_update_callback(self._emit_tracking_updated_signal)
+            self.process_monitor.add_process_list_callback(self._emit_process_list_signal)
             
             # Setup timers for updates (fix threading issue)
             self.update_timer = QTimer(self)  # Parent the timer to this widget

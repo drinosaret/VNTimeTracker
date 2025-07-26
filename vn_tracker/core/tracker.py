@@ -65,28 +65,38 @@ class TimeTracker:
     def stop(self) -> None:
         """Stop tracking and save pending data."""
         if self.running:
-            # Signal shutdown to all threads
+            # Signal shutdown to all threads first
             self._shutdown_event.set()
             
-            with self._data_lock:
-                # Save pending time
-                if self.selected_vn_title and self.last_start:
-                    elapsed = int(time.time() - self.last_start)
+            # Try to acquire lock with timeout to save final data
+            if self._data_lock.acquire(timeout=10.0):
+                try:
+                    # Save pending time
+                    if self.selected_vn_title and self.last_start:
+                        elapsed = int(time.time() - self.last_start)
+                        safe_call(
+                            self.data_manager.add_time,
+                            self.selected_vn_title, elapsed,
+                            operation_name="final time save on stop",
+                            logger=self.crash_logger
+                        )
+                        self.last_start = None
+                    
+                    # Force data save
                     safe_call(
-                        self.data_manager.add_time,
-                        self.selected_vn_title, elapsed,
-                        operation_name="final time save on stop",
+                        self.data_manager.save,
+                        force_backup=True,
+                        operation_name="final data save on stop",
                         logger=self.crash_logger
                     )
-                    self.last_start = None
-                
-                # Force data save
-                safe_call(
-                    self.data_manager.save,
-                    force_backup=True,
-                    operation_name="final data save on stop",
-                logger=self.crash_logger
-            )
+                finally:
+                    self._data_lock.release()
+            else:
+                # If unable to get lock, do emergency save
+                if self.crash_logger:
+                    self.crash_logger.log_error("Could not acquire lock for final save, attempting emergency save")
+                if hasattr(self.data_manager, 'emergency_save'):
+                    self.data_manager.emergency_save()
             
             self.running = False
             
@@ -94,10 +104,12 @@ class TimeTracker:
             if self.track_thread:
                 self.track_thread.stop()
                 safe_join_thread(self.track_thread, timeout=5.0)
+                self.track_thread = None
             
             if self.autosave_thread:
                 self.autosave_thread.stop()
                 safe_join_thread(self.autosave_thread, timeout=5.0)
+                self.autosave_thread = None
     
     def set_target(self, vn_title: str, process_name: str) -> None:
         """Set target VN and process for tracking."""
@@ -177,14 +189,28 @@ class TimeTracker:
     
     def _track_loop(self) -> None:
         """Main tracking loop."""
-        while self.running:
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        while self.running and consecutive_errors < max_consecutive_errors:
             try:
+                # Check if required objects are still valid
+                if not hasattr(self, 'data_manager') or self.data_manager is None:
+                    if self.crash_logger:
+                        self.crash_logger.log_error("Data manager is None in track loop")
+                    break
+                
+                if not hasattr(self, 'process_monitor') or self.process_monitor is None:
+                    if self.crash_logger:
+                        self.crash_logger.log_error("Process monitor is None in track loop")
+                    break
+                
                 if not self.selected_process or not self.selected_vn_title:
                     self.current_state = TrackingState.INACTIVE
                     time.sleep(1)
                     continue
 
-                # Get current process and idle state
+                # Get current process and idle state with safety
                 active_process = safe_call(
                     self.process_monitor.get_active_process,
                     operation_name="get active process",
@@ -201,61 +227,82 @@ class TimeTracker:
 
                 is_process_active = (active_process == self.selected_process)
 
-                # Determine state and handle time tracking
-                if not is_process_active:
-                    state = TrackingState.INACTIVE
-                    if self.last_start:
-                        elapsed = int(time.time() - self.last_start)
-                        safe_call(
-                            self.data_manager.add_time,
-                            self.selected_vn_title, elapsed,
-                            operation_name="add time on process inactive",
-                            logger=self.crash_logger
-                        )
-                        self.last_start = None
-                elif idle_time > self.afk_threshold:
-                    state = TrackingState.AFK
-                    if self.last_start:
-                        elapsed = int(time.time() - self.last_start)
-                        safe_call(
-                            self.data_manager.add_time,
-                            self.selected_vn_title, elapsed,
-                            operation_name="add time on AFK",
-                            logger=self.crash_logger
-                        )
-                        self.last_start = None
+                # Acquire lock with timeout to prevent deadlocks
+                state_changed = False
+                if self._data_lock.acquire(timeout=2.0):
+                    try:
+                        # Double check state after acquiring lock
+                        if not self.running:
+                            return
+                        
+                        # Determine state and handle time tracking
+                        if not is_process_active:
+                            state = TrackingState.INACTIVE
+                            if self.last_start:
+                                elapsed = int(time.time() - self.last_start)
+                                safe_call(
+                                    self.data_manager.add_time,
+                                    self.selected_vn_title, elapsed,
+                                    operation_name="add time on process inactive",
+                                    logger=self.crash_logger
+                                )
+                                self.last_start = None
+                                state_changed = True
+                        elif idle_time > self.afk_threshold:
+                            state = TrackingState.AFK
+                            if self.last_start:
+                                elapsed = int(time.time() - self.last_start)
+                                safe_call(
+                                    self.data_manager.add_time,
+                                    self.selected_vn_title, elapsed,
+                                    operation_name="add time on AFK",
+                                    logger=self.crash_logger
+                                )
+                                self.last_start = None
+                                state_changed = True
+                        else:
+                            state = TrackingState.ACTIVE
+                            if self.last_start is None:
+                                self.last_start = time.time()
+                                state_changed = True
+
+                        # Emergency save during active tracking
+                        current_time = time.time()
+                        if (state == TrackingState.ACTIVE and 
+                            self.last_start and 
+                            current_time - self._last_save_time > self._save_interval):
+                            
+                            # Save progress
+                            elapsed = int(current_time - self.last_start)
+                            if elapsed > 0:
+                                safe_call(
+                                    self.data_manager.add_time,
+                                    self.selected_vn_title, elapsed,
+                                    operation_name="emergency save during tracking",
+                                    logger=self.crash_logger
+                                )
+                                # Reset to avoid double counting
+                                self.last_start = current_time
+                                self._last_save_time = current_time
+
+                        # Store state
+                        self.current_state = state
+
+                        # Get total seconds after state changes
+                        current_seconds = self.get_current_seconds()
+                    finally:
+                        self._data_lock.release()
                 else:
-                    state = TrackingState.ACTIVE
-                    if self.last_start is None:
-                        self.last_start = time.time()
+                    if self.crash_logger:
+                        self.crash_logger.log_error("Track loop: Failed to acquire data lock within timeout")
+                    consecutive_errors += 1
+                    time.sleep(2.0)
+                    continue
 
-                # Emergency save during active tracking
-                current_time = time.time()
-                if (state == TrackingState.ACTIVE and 
-                    self.last_start and 
-                    current_time - self._last_save_time > self._save_interval):
-                    
-                    # Save progress
-                    elapsed = int(current_time - self.last_start)
-                    if elapsed > 0:
-                        safe_call(
-                            self.data_manager.add_time,
-                            self.selected_vn_title, elapsed,
-                            operation_name="emergency save during tracking",
-                            logger=self.crash_logger
-                        )
-                        # Reset to avoid double counting
-                        self.last_start = current_time
-                        self._last_save_time = current_time
-
-                # Store state
-                self.current_state = state
-
-                # Get total seconds after state changes
-                current_seconds = self.get_current_seconds()
-
-                # Execute callbacks
+                # Execute callbacks outside of lock to prevent deadlocks
                 for callback in self.state_callbacks:
+                    if not self.running:
+                        break
                     safe_call(
                         callback, state, current_seconds,
                         operation_name="state callback",
@@ -263,33 +310,73 @@ class TimeTracker:
                     )
 
                 for callback in self.update_callbacks:
+                    if not self.running:
+                        break
                     safe_call(
                         callback,
                         operation_name="update callback",
                         logger=self.crash_logger
                     )
 
+                # Reset error counter on successful iteration
+                consecutive_errors = 0
+                
                 time.sleep(1)
 
             except Exception as e:
+                consecutive_errors += 1
+                error_msg = f"Tracking error (attempt {consecutive_errors}): {e}"
                 if self.crash_logger:
-                    self.crash_logger.log_error(f"Tracking error: {e}")
+                    self.crash_logger.log_error(error_msg)
                 else:
-                    print(f"Tracking error: {e}")
+                    print(error_msg)
                 
-                if self.running:
-                    time.sleep(1)
+                if self.running and consecutive_errors < max_consecutive_errors:
+                    # Exponential backoff on errors
+                    sleep_time = min(1.0 * (2 ** (consecutive_errors - 1)), 10.0)
+                    time.sleep(sleep_time)
+        
+        if consecutive_errors >= max_consecutive_errors:
+            error_msg = f"Track thread stopping due to {consecutive_errors} consecutive errors"
+            if self.crash_logger:
+                self.crash_logger.log_error(error_msg)
+            else:
+                print(error_msg)
     
     def _autosave_loop(self) -> None:
         """Periodic data saving loop."""
-        while self.running and not self._shutdown_event.is_set():
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        while self.running and not self._shutdown_event.is_set() and consecutive_errors < max_consecutive_errors:
             try:
-                with self._data_lock:
-                    safe_call(
-                        self.data_manager.save,
-                        operation_name="autosave",
-                        logger=self.crash_logger
-                    )
+                # Check if data manager is still valid
+                if not hasattr(self, 'data_manager') or self.data_manager is None:
+                    if self.crash_logger:
+                        self.crash_logger.log_error("Data manager is None in autosave loop")
+                    break
+                
+                # Acquire lock with timeout to prevent deadlocks
+                if self._data_lock.acquire(timeout=5.0):
+                    try:
+                        # Double check state after acquiring lock
+                        if self.running and not self._shutdown_event.is_set():
+                            safe_call(
+                                self.data_manager.save,
+                                operation_name="autosave",
+                                logger=self.crash_logger
+                            )
+                    finally:
+                        self._data_lock.release()
+                else:
+                    if self.crash_logger:
+                        self.crash_logger.log_error("Autosave: Failed to acquire data lock within timeout")
+                    consecutive_errors += 1
+                    time.sleep(5.0)
+                    continue
+                
+                # Reset error counter on successful save
+                consecutive_errors = 0
                 
                 # Wait with safe polling instead of threading.Event.wait()
                 # This avoids Windows heap corruption issues
@@ -297,16 +384,29 @@ class TimeTracker:
                 while time.time() - start_wait < 30.0:
                     if self._shutdown_event.is_set():
                         return
+                    if not self.running:
+                        return
                     time.sleep(1.0)  # Poll every second
                     
             except Exception as e:
+                consecutive_errors += 1
+                error_msg = f"Auto-save error (attempt {consecutive_errors}): {e}"
                 if self.crash_logger:
-                    self.crash_logger.log_error(f"Auto-save error: {e}")
+                    self.crash_logger.log_error(error_msg)
                 else:
-                    print(f"Auto-save error: {e}")
+                    print(error_msg)
                 
-                if self.running and not self._shutdown_event.is_set():
-                    time.sleep(10.0)  # Simple sleep, no Event.wait()
+                if self.running and not self._shutdown_event.is_set() and consecutive_errors < max_consecutive_errors:
+                    # Exponential backoff on errors
+                    sleep_time = min(10.0 * (2 ** (consecutive_errors - 1)), 60.0)
+                    time.sleep(sleep_time)
+        
+        if consecutive_errors >= max_consecutive_errors:
+            error_msg = f"Autosave thread stopping due to {consecutive_errors} consecutive errors"
+            if self.crash_logger:
+                self.crash_logger.log_error(error_msg)
+            else:
+                print(error_msg)
     
     def emergency_save(self) -> None:
         """Execute emergency data save."""

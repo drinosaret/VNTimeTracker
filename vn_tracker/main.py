@@ -8,7 +8,7 @@ import faulthandler
 import traceback
 import ctypes
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 # Windows-specific crash prevention
 if sys.platform == "win32":
@@ -25,6 +25,40 @@ if sys.platform == "win32":
         kernel32.SetErrorMode(
             SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
         )
+        
+        # Add heap corruption detection and memory monitoring
+        try:
+            # Enable heap debugging for debug builds
+            import ctypes.wintypes
+            heap_flags = 0x00000002  # HEAP_GENERATE_EXCEPTIONS
+            heap = kernel32.GetProcessHeap()
+            if heap:
+                kernel32.HeapSetInformation(heap, 1, ctypes.byref(ctypes.wintypes.DWORD(heap_flags)), 4)
+            
+            # Set up process memory monitoring to detect issues early
+            try:
+                import psutil
+                process = psutil.Process()
+                initial_memory = process.memory_info().rss
+                print(f"Initial memory usage: {initial_memory / 1024 / 1024:.1f} MB")
+                
+                # Set up memory monitoring timer
+                def check_memory():
+                    try:
+                        current_memory = psutil.Process().memory_info().rss
+                        if current_memory > initial_memory * 2:  # More than 2x initial memory
+                            print(f"Warning: High memory usage detected: {current_memory / 1024 / 1024:.1f} MB")
+                    except:
+                        pass
+                
+                # Check memory every 30 seconds (in main application)
+                _memory_check_callback = check_memory
+            except ImportError:
+                _memory_check_callback = None
+                
+        except:
+            pass  # Not critical if this fails
+            
     except Exception as e:
         print(f"Windows crash prevention setup failed: {e}")
 
@@ -36,15 +70,43 @@ _app_instance = None
 _main_window = None
 
 def emergency_shutdown():
-    """Emergency shutdown procedure."""
+    """Emergency shutdown procedure with enhanced safety."""
     try:
         print("Emergency shutdown initiated...")
-        if _main_window:
-            _main_window.emergency_save()
+        
+        # Try to save data first
+        if _main_window and hasattr(_main_window, 'data_manager'):
+            try:
+                print("Attempting emergency data save...")
+                if hasattr(_main_window.data_manager, 'emergency_save'):
+                    _main_window.data_manager.emergency_save()
+                else:
+                    _main_window.data_manager.save(force_backup=True)
+                print("Emergency data save completed")
+            except Exception as e:
+                print(f"Emergency data save failed: {e}")
+        
+        # Stop tracker if available
+        if _main_window and hasattr(_main_window, 'tracker'):
+            try:
+                print("Stopping tracker...")
+                _main_window.tracker.stop()
+                print("Tracker stopped")
+            except Exception as e:
+                print(f"Tracker stop failed: {e}")
+        
+        # Quit application
         if _app_instance:
-            _app_instance.quit()
+            try:
+                _app_instance.quit()
+            except Exception as e:
+                print(f"App quit failed: {e}")
+                
     except Exception as e:
         print(f"Emergency shutdown error: {e}")
+        # Last resort - force exit
+        import os
+        os._exit(1)
 
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
@@ -96,10 +158,17 @@ def main() -> None:
         _app_instance.setApplicationVersion("1.1.0")
         _app_instance.setOrganizationName("VN club Resurrection")
         
-        # Set a global exception handler for Qt
+        # Set a global exception handler for Qt with memory safety
         def qt_exception_handler(exc_type, exc_value, exc_traceback):
-            crash_logger.handle_exception(exc_type, exc_value, exc_traceback)
-            emergency_shutdown()
+            try:
+                if crash_logger:
+                    crash_logger.handle_exception(exc_type, exc_value, exc_traceback)
+                emergency_shutdown()
+            except Exception as e:
+                print(f"Exception handler failed: {e}")
+                # Force exit as last resort
+                import os
+                os._exit(1)
         
         sys.excepthook = qt_exception_handler
         
@@ -108,6 +177,13 @@ def main() -> None:
             _main_window = VNTrackerMainWindow(config_file, log_file, image_cache_dir, crash_logger)
             _main_window.show()
             crash_logger.log_info("Main window created successfully")
+            
+            # Setup memory monitoring if available
+            if '_memory_check_callback' in locals() and _memory_check_callback:
+                memory_timer = QTimer()
+                memory_timer.timeout.connect(_memory_check_callback)
+                memory_timer.start(30000)  # Check every 30 seconds
+                
         except Exception as e:
             crash_logger.log_error(f"Failed to create main window: {e}")
             raise
