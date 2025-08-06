@@ -10,6 +10,9 @@ import ctypes
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt, QTimer
 
+# Application version
+APP_VERSION = "1.1.3"
+
 # Windows-specific crash prevention
 if sys.platform == "win32":
     try:
@@ -64,6 +67,52 @@ if sys.platform == "win32":
 
 from .ui.main_window_qt import VNTrackerMainWindow
 from .utils.crash_logger import CrashLogger
+
+def fix_taskbar_icon(app):
+    """Fix taskbar icon issue on Windows by setting application ID and icon."""
+    try:
+        import os
+        from PyQt5.QtGui import QIcon
+        
+        # Windows-specific fix for taskbar icon
+        if sys.platform == "win32":
+            try:
+                # Set unique application ID to separate from Python interpreter
+                import ctypes
+                myappid = f'vnclub.vntracker.timetracker.{APP_VERSION}'  # Unique app ID
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+                print(f"Set Windows application ID: {myappid}")
+            except Exception as e:
+                print(f"Could not set Windows application ID: {e}")
+        
+        # Try to load and set application icon
+        icon_paths = [
+            os.path.join(os.path.dirname(__file__), "..", "icons", "app_icon.png"),
+            os.path.join(os.path.dirname(__file__), "..", "icons", "app_icon.ico"),
+            os.path.join("icons", "app_icon.png"),
+            os.path.join("icons", "app_icon.ico"),
+            "app_icon.png",
+            "app_icon.ico"
+        ]
+        
+        icon_set = False
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                try:
+                    icon = QIcon(icon_path)
+                    if not icon.isNull():
+                        app.setWindowIcon(icon)
+                        print(f"Set application icon from: {icon_path}")
+                        icon_set = True
+                        break
+                except Exception as e:
+                    print(f"Error setting icon from {icon_path}: {e}")
+        
+        if not icon_set:
+            print("No application icon found, will use programmatic icon")
+            
+    except Exception as e:
+        print(f"Error in fix_taskbar_icon: {e}")
 
 # Global application state
 _app_instance = None
@@ -153,10 +202,46 @@ def main() -> None:
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
         
+        # Additional high DPI attributes for better scaling
+        try:
+            QApplication.setAttribute(Qt.AA_DisableWindowContextHelpButton, True)
+            # Force high DPI scaling policy for consistent behavior
+            os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
+            os.environ['QT_SCALE_FACTOR'] = '1'
+        except:
+            pass
+        
         _app_instance = QApplication(sys.argv)
-        _app_instance.setApplicationName("VN Tracker")
-        _app_instance.setApplicationVersion("1.1.0")
+        
+        # Detect and adjust for high DPI displays
+        try:
+            from PyQt5.QtWidgets import QDesktopWidget
+            desktop = QDesktopWidget()
+            screen = desktop.screenGeometry()
+            dpi = desktop.logicalDpiX()
+            
+            print(f"Screen resolution: {screen.width()}x{screen.height()}")
+            print(f"Logical DPI: {dpi}")
+            
+            # Calculate scale factor based on DPI
+            # Standard DPI is 96, high DPI starts around 120+
+            scale_factor = max(1.0, dpi / 96.0)
+            if scale_factor > 1.2:
+                print(f"High DPI detected, scale factor: {scale_factor:.2f}")
+                # Store scale factor for UI adjustments
+                _app_instance.setProperty("scale_factor", scale_factor)
+            else:
+                _app_instance.setProperty("scale_factor", 1.0)
+                
+        except Exception as e:
+            print(f"DPI detection failed: {e}")
+            _app_instance.setProperty("scale_factor", 1.0)
+        _app_instance.setApplicationName("VN Time Tracker")
+        _app_instance.setApplicationVersion(APP_VERSION)
         _app_instance.setOrganizationName("VN club Resurrection")
+        
+        # Fix taskbar icon issue on Windows
+        fix_taskbar_icon(_app_instance)
         
         # Set a global exception handler for Qt with memory safety
         def qt_exception_handler(exc_type, exc_value, exc_traceback):

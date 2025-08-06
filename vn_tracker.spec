@@ -101,7 +101,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon='icons/app_icon.ico',
     # Windows-specific options for better stability
     manifest=None,
     uac_admin=False,

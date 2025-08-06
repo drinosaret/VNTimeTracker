@@ -253,6 +253,17 @@ class TimeDataManager:
             self._data[vn_title][today] = 0
             self._pending_changes = True
     
+    def delete_vn_data(self, vn_title: str) -> None:
+        """Delete all data for a VN."""
+        if not vn_title:
+            return
+        
+        with self._lock:
+            if vn_title in self._data:
+                del self._data[vn_title]
+                self._pending_changes = True
+                print(f"Deleted all time data for VN: {vn_title}")
+    
     def has_pending_changes(self) -> bool:
         """Check if there are unsaved changes."""
         return self._pending_changes
